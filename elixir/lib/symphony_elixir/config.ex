@@ -219,6 +219,53 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :terminal_states])
   end
 
+  @spec tracker_active_states() :: [String.t()]
+  def tracker_active_states do
+    get_in(validated_workflow_options(), [:tracker, :active_states])
+  end
+
+  @spec tracker_terminal_states() :: [String.t()]
+  def tracker_terminal_states do
+    get_in(validated_workflow_options(), [:tracker, :terminal_states])
+  end
+
+  @spec jira_endpoint() :: String.t() | nil
+  def jira_endpoint do
+    validated_workflow_options()
+    |> get_in([:tracker, :endpoint])
+    |> then(fn
+      val when is_binary(val) and val != "" -> String.trim_trailing(val, "/")
+      _ -> nil
+    end)
+  end
+
+  @spec jira_api_token() :: String.t() | nil
+  def jira_api_token do
+    validated_workflow_options()
+    |> get_in([:tracker, :api_key])
+    |> resolve_env_value(System.get_env("JIRA_API_KEY"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_project_key() :: String.t() | nil
+  def jira_project_key do
+    get_in(validated_workflow_options(), [:tracker, :project_slug])
+  end
+
+  @spec jira_assignee() :: String.t() | nil
+  def jira_assignee do
+    validated_workflow_options()
+    |> get_in([:tracker, :assignee])
+    |> resolve_env_value(System.get_env("JIRA_ASSIGNEE"))
+    |> normalize_secret_value()
+  end
+
+  @spec jira_email() :: String.t() | nil
+  def jira_email do
+    System.get_env("JIRA_EMAIL")
+    |> normalize_secret_value()
+  end
+
   @spec poll_interval_ms() :: pos_integer()
   def poll_interval_ms do
     get_in(validated_workflow_options(), [:polling, :interval_ms])
@@ -367,6 +414,9 @@ defmodule SymphonyElixir.Config do
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
+         :ok <- require_jira_token(),
+         :ok <- require_jira_endpoint(),
+         :ok <- require_jira_project(),
          :ok <- require_valid_codex_runtime_settings() do
       require_codex_command()
     end
@@ -389,6 +439,7 @@ defmodule SymphonyElixir.Config do
   defp require_tracker_kind do
     case tracker_kind() do
       "linear" -> :ok
+      "jira" -> :ok
       "memory" -> :ok
       nil -> {:error, :missing_tracker_kind}
       other -> {:error, {:unsupported_tracker_kind, other}}
@@ -416,6 +467,48 @@ defmodule SymphonyElixir.Config do
           :ok
         else
           {:error, :missing_linear_project_slug}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_token do
+    case tracker_kind() do
+      "jira" ->
+        if is_binary(jira_api_token()) do
+          :ok
+        else
+          {:error, :missing_jira_api_token}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_endpoint do
+    case tracker_kind() do
+      "jira" ->
+        if is_binary(jira_endpoint()) do
+          :ok
+        else
+          {:error, :missing_jira_endpoint}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp require_jira_project do
+    case tracker_kind() do
+      "jira" ->
+        if is_binary(jira_project_key()) do
+          :ok
+        else
+          {:error, :missing_jira_project_key}
         end
 
       _ ->

@@ -353,7 +353,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert Jason.decode!(text) == %{
              "error" => %{
-               "message" => "Linear GraphQL tool execution failed.",
+               "message" => "Tool execution failed.",
                "reason" => ":boom"
              }
            }
