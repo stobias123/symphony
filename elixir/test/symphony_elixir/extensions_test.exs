@@ -320,6 +320,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
+    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server --model gpt-5.3-codex")
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
 
@@ -342,6 +343,20 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
+             "pricing" => %{
+               "model" => "gpt-5.3-codex",
+               "totals" => %{
+                 "available" => true,
+                 "cached_input_discount_applied" => false,
+                 "configured_model" => "gpt-5.3-codex",
+                 "input_cost_usd" => 1.0e-5,
+                 "output_cost_usd" => 1.2e-4,
+                 "pricing_label" => "GPT-5-Codex",
+                 "pricing_model" => "gpt-5-codex",
+                 "total_cost_usd" => 1.3e-4
+               },
+               "note" => "Estimated from published input/output token rates; cached-input discounts are excluded."
+             },
              "counts" => %{"running" => 1, "retrying" => 1},
              "running" => [
                %{
@@ -354,7 +369,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
-                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12},
+                 "pricing" => %{
+                   "available" => true,
+                   "cached_input_discount_applied" => false,
+                   "configured_model" => "gpt-5.3-codex",
+                   "input_cost_usd" => 1.0e-5,
+                   "output_cost_usd" => 1.2e-4,
+                   "pricing_label" => "GPT-5-Codex",
+                   "pricing_model" => "gpt-5-codex",
+                   "total_cost_usd" => 1.3e-4
+                 }
                }
              ],
              "retrying" => [
@@ -384,6 +409,19 @@ defmodule SymphonyElixir.ExtensionsTest do
              "status" => "running",
              "workspace" => %{"path" => Path.join(Config.workspace_root(), "MT-HTTP")},
              "attempts" => %{"restart_count" => 0, "current_retry_attempt" => 0},
+             "pricing" => %{
+               "model" => "gpt-5.3-codex",
+               "totals" => %{
+                 "available" => true,
+                 "cached_input_discount_applied" => false,
+                 "configured_model" => "gpt-5.3-codex",
+                 "input_cost_usd" => 1.0e-5,
+                 "output_cost_usd" => 1.2e-4,
+                 "pricing_label" => "GPT-5-Codex",
+                 "pricing_model" => "gpt-5-codex",
+                 "total_cost_usd" => 1.3e-4
+               }
+             },
              "running" => %{
                "session_id" => "thread-http",
                "turn_count" => 7,
@@ -392,7 +430,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_event" => "notification",
                "last_message" => "rendered",
                "last_event_at" => nil,
-               "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+               "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12},
+               "pricing" => %{
+                 "available" => true,
+                 "cached_input_discount_applied" => false,
+                 "configured_model" => "gpt-5.3-codex",
+                 "input_cost_usd" => 1.0e-5,
+                 "output_cost_usd" => 1.2e-4,
+                 "pricing_label" => "GPT-5-Codex",
+                 "pricing_model" => "gpt-5-codex",
+                 "total_cost_usd" => 1.3e-4
+               }
              },
              "retry" => nil,
              "logs" => %{"codex_session_logs" => []},
@@ -469,6 +517,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "dashboard bootstraps liveview from embedded static assets" do
+    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server --model gpt-5.3-codex")
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
 
     {:ok, _pid} =
@@ -512,6 +561,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do
+    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server --model gpt-5.3-codex")
     orchestrator_name = Module.concat(__MODULE__, :DashboardOrchestrator)
     snapshot = static_snapshot()
 
@@ -539,6 +589,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Offline"
     assert html =~ "Copy ID"
     assert html =~ "Codex update"
+    assert html =~ "Estimated cost"
+    assert html =~ "$0.0001"
+    assert html =~ "Pricing model:"
+    assert html =~ "gpt-5.3-codex"
+    assert html =~ "ticket total"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"

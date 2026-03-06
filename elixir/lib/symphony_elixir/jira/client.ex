@@ -90,7 +90,7 @@ defmodule SymphonyElixir.Jira.Client do
   end
 
   defp do_search(jql, start_at \\ 0, acc \\ []) do
-    path = "/rest/api/3/search"
+    path = "/rest/api/3/search/jql"
 
     params = %{
       "jql" => jql,

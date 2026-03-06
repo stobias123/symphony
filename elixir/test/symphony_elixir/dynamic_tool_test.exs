@@ -22,6 +22,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert description =~ "Linear"
   end
 
+  test "tool_specs advertises jira_rest and confluence_rest for jira trackers" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_endpoint: "https://example.atlassian.net",
+      tracker_api_token: "jira-token",
+      tracker_project_slug: "PROJ"
+    )
+
+    assert [
+             %{"description" => jira_description, "name" => "jira_rest"},
+             %{"description" => confluence_description, "name" => "confluence_rest"}
+           ] = DynamicTool.tool_specs()
+
+    assert jira_description =~ "Jira"
+    assert confluence_description =~ "Confluence"
+  end
+
   test "unsupported tools return a failure payload with the supported tool list" do
     response = DynamicTool.execute("not_a_real_tool", %{})
 
@@ -38,6 +55,103 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "error" => %{
                "message" => ~s(Unsupported dynamic tool: "not_a_real_tool".),
                "supportedTools" => ["linear_graphql"]
+             }
+           }
+  end
+
+  test "confluence_rest executes requests with inferred endpoint and basic auth" do
+    previous_user = System.get_env("CONFLUENCE_USER")
+    previous_token = System.get_env("CONFLUENCE_TOKEN")
+
+    on_exit(fn ->
+      restore_env("CONFLUENCE_USER", previous_user)
+      restore_env("CONFLUENCE_TOKEN", previous_token)
+    end)
+
+    System.put_env("CONFLUENCE_USER", "dev@example.com")
+    System.put_env("CONFLUENCE_TOKEN", "confluence-token")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_endpoint: "https://example.atlassian.net",
+      tracker_api_token: "jira-token",
+      tracker_project_slug: "PROJ"
+    )
+
+    test_pid = self()
+
+    response =
+      DynamicTool.execute(
+        "confluence_rest",
+        %{
+          "method" => "GET",
+          "path" => "/api/v2/pages",
+          "query" => %{"limit" => "1"}
+        },
+        confluence_request_fun: fn method, url, body, query ->
+          send(test_pid, {:confluence_request, method, url, body, query})
+          {:ok, %{status: 200, body: %{"results" => []}}}
+        end
+      )
+
+    assert_received {:confluence_request, "GET", "https://example.atlassian.net/wiki/api/v2/pages", nil, %{"limit" => "1"}}
+    assert response["success"] == true
+
+    assert [
+             %{
+               "type" => "inputText",
+               "text" => text
+             }
+           ] = response["contentItems"]
+
+    assert Jason.decode!(text) == %{"results" => []}
+  end
+
+  test "confluence_rest reports missing auth user when not configured" do
+    previous_user = System.get_env("CONFLUENCE_USER")
+    previous_token = System.get_env("CONFLUENCE_TOKEN")
+    previous_lower_user = System.get_env("confluence_user")
+    previous_lower_token = System.get_env("confluence_token")
+
+    on_exit(fn ->
+      restore_env("CONFLUENCE_USER", previous_user)
+      restore_env("CONFLUENCE_TOKEN", previous_token)
+      restore_env("confluence_user", previous_lower_user)
+      restore_env("confluence_token", previous_lower_token)
+    end)
+
+    System.delete_env("CONFLUENCE_USER")
+    System.delete_env("CONFLUENCE_TOKEN")
+    System.delete_env("confluence_user")
+    System.delete_env("confluence_token")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_endpoint: "https://example.atlassian.net",
+      tracker_api_token: "jira-token",
+      tracker_project_slug: "PROJ"
+    )
+
+    response =
+      DynamicTool.execute(
+        "confluence_rest",
+        %{"method" => "GET", "path" => "/api/v2/pages"},
+        confluence_request_fun: fn _method, _url, _body, _query ->
+          flunk("confluence request should not execute without credentials")
+        end
+      )
+
+    assert response["success"] == false
+
+    assert [
+             %{
+               "text" => text
+             }
+           ] = response["contentItems"]
+
+    assert Jason.decode!(text) == %{
+             "error" => %{
+               "message" => "Symphony is missing Confluence auth user. Export `CONFLUENCE_USER` (or `confluence_user`)."
              }
            }
   end

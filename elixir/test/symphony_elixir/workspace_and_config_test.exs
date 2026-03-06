@@ -684,9 +684,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.codex_turn_timeout_ms() == 3_600_000
     assert Config.codex_read_timeout_ms() == 5_000
     assert Config.codex_stall_timeout_ms() == 300_000
+    assert Config.codex_model() == nil
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server --model gpt-5.3-codex")
     assert Config.codex_command() == "codex app-server --model gpt-5.3-codex"
+    assert Config.codex_model() == "gpt-5.3-codex"
+
+    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex --model=gpt-5-mini app-server")
+    assert Config.codex_model() == "gpt-5-mini"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       codex_approval_policy: "on-request",
@@ -797,6 +802,45 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server")
     assert Config.codex_command() == "codex app-server"
+  end
+
+  test "config resolves confluence auth and endpoint values" do
+    previous_endpoint = System.get_env("CONFLUENCE_ENDPOINT")
+    previous_user = System.get_env("CONFLUENCE_USER")
+    previous_token = System.get_env("CONFLUENCE_TOKEN")
+    previous_lower_user = System.get_env("confluence_user")
+    previous_lower_token = System.get_env("confluence_token")
+
+    on_exit(fn ->
+      restore_env("CONFLUENCE_ENDPOINT", previous_endpoint)
+      restore_env("CONFLUENCE_USER", previous_user)
+      restore_env("CONFLUENCE_TOKEN", previous_token)
+      restore_env("confluence_user", previous_lower_user)
+      restore_env("confluence_token", previous_lower_token)
+    end)
+
+    System.delete_env("CONFLUENCE_ENDPOINT")
+    System.delete_env("CONFLUENCE_USER")
+    System.delete_env("CONFLUENCE_TOKEN")
+    System.put_env("confluence_user", "lower-user@example.com")
+    System.put_env("confluence_token", "lower-token")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "jira",
+      tracker_endpoint: "https://example.atlassian.net"
+    )
+
+    assert Config.confluence_endpoint() == "https://example.atlassian.net/wiki"
+    assert Config.confluence_user() == "lower-user@example.com"
+    assert Config.confluence_token() == "lower-token"
+
+    System.put_env("CONFLUENCE_ENDPOINT", "https://confluence.example.com/wiki/")
+    System.put_env("CONFLUENCE_USER", "upper-user@example.com")
+    System.put_env("CONFLUENCE_TOKEN", "upper-token")
+
+    assert Config.confluence_endpoint() == "https://confluence.example.com/wiki"
+    assert Config.confluence_user() == "upper-user@example.com"
+    assert Config.confluence_token() == "upper-token"
   end
 
   test "config resolves $VAR references for env-backed secret and path values" do

@@ -176,6 +176,11 @@ defmodule SymphonyElixir.Orchestrator do
     with :ok <- Config.validate!(),
          {:ok, issues} <- Tracker.fetch_candidate_issues(),
          true <- available_slots(state) > 0 do
+      Logger.info(
+        "Tracker poll completed tracker=#{Config.tracker_kind() || "unknown"} " <>
+          "candidate_issues=#{length(issues)} available_slots=#{available_slots(state)}"
+      )
+
       choose_issues(issues, state)
     else
       {:error, :missing_linear_api_token} ->
@@ -184,6 +189,18 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, :missing_linear_project_slug} ->
         Logger.error("Linear project slug missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_jira_api_token} ->
+        Logger.error("Jira API token missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_jira_endpoint} ->
+        Logger.error("Jira endpoint missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_jira_project_key} ->
+        Logger.error("Jira project key missing in WORKFLOW.md")
         state
 
       {:error, :missing_tracker_kind} ->
@@ -225,7 +242,9 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+        Logger.error(
+          "Failed to fetch from tracker tracker=#{Config.tracker_kind() || "unknown"}: #{inspect(reason)}"
+        )
         state
 
       false ->

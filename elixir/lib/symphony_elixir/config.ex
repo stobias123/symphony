@@ -266,6 +266,31 @@ defmodule SymphonyElixir.Config do
     |> normalize_secret_value()
   end
 
+  @spec confluence_endpoint() :: String.t() | nil
+  def confluence_endpoint do
+    read_env_with_fallback("CONFLUENCE_ENDPOINT", "confluence_endpoint")
+    |> normalize_secret_value()
+    |> case do
+      endpoint when is_binary(endpoint) and endpoint != "" ->
+        String.trim_trailing(endpoint, "/")
+
+      _ ->
+        inferred_confluence_endpoint()
+    end
+  end
+
+  @spec confluence_user() :: String.t() | nil
+  def confluence_user do
+    read_env_with_fallback("CONFLUENCE_USER", "confluence_user")
+    |> normalize_secret_value()
+  end
+
+  @spec confluence_token() :: String.t() | nil
+  def confluence_token do
+    read_env_with_fallback("CONFLUENCE_TOKEN", "confluence_token")
+    |> normalize_secret_value()
+  end
+
   @spec poll_interval_ms() :: pos_integer()
   def poll_interval_ms do
     get_in(validated_workflow_options(), [:polling, :interval_ms])
@@ -325,10 +350,29 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:codex, :command])
   end
 
+  @spec codex_model() :: String.t() | nil
+  def codex_model do
+    codex_command()
+    |> OptionParser.split()
+    |> extract_model_arg()
+  end
+
   @spec codex_turn_timeout_ms() :: pos_integer()
   def codex_turn_timeout_ms do
     get_in(validated_workflow_options(), [:codex, :turn_timeout_ms])
   end
+
+  defp extract_model_arg([]), do: nil
+  defp extract_model_arg(["--model", model | _rest]) when is_binary(model), do: model
+
+  defp extract_model_arg([arg | rest]) when is_binary(arg) do
+    case String.split(arg, "=", parts: 2) do
+      ["--model", model] when model != "" -> model
+      _ -> extract_model_arg(rest)
+    end
+  end
+
+  defp extract_model_arg([_arg | rest]), do: extract_model_arg(rest)
 
   @spec codex_approval_policy() :: String.t() | map()
   def codex_approval_policy do
@@ -1028,4 +1072,34 @@ defmodule SymphonyElixir.Config do
   end
 
   defp normalize_secret_value(_value), do: nil
+
+  defp inferred_confluence_endpoint do
+    case tracker_kind() do
+      "jira" ->
+        case jira_endpoint() do
+          endpoint when is_binary(endpoint) -> ensure_confluence_path(endpoint)
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp ensure_confluence_path(endpoint) do
+    trimmed = String.trim_trailing(endpoint, "/")
+
+    if String.ends_with?(trimmed, "/wiki") do
+      trimmed
+    else
+      trimmed <> "/wiki"
+    end
+  end
+
+  defp read_env_with_fallback(primary, secondary) do
+    case System.get_env(primary) do
+      nil -> System.get_env(secondary)
+      value -> value
+    end
+  end
 end

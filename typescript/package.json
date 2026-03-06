@@ -1,0 +1,32 @@
+{
+  "name": "symphony",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Autonomous agent orchestrator with swappable model providers",
+  "main": "dist/index.js",
+  "bin": {
+    "symphony": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js && npm run build:web",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "build:web": "cd web && npm install && npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.70",
+    "js-yaml": "^4.1.0",
+    "liquidjs": "^10.17.0",
+    "pino": "^9.5.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

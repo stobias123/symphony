@@ -5,6 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias SymphonyElixir.OpenAIPricing
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
 
@@ -100,6 +101,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
+            <p class="metric-label">Estimated cost</p>
+            <p class="metric-value numeric"><%= OpenAIPricing.display_cost(@payload.pricing.totals) %></p>
+            <p class="metric-detail">
+              <%= @payload.pricing.note %>
+            </p>
+          </article>
+
+          <article class="metric-card">
             <p class="metric-label">Runtime</p>
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
             <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
@@ -121,9 +130,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <div class="section-header">
             <div>
               <h2 class="section-title">Running sessions</h2>
-              <p class="section-copy">Active issues, last known agent activity, and token usage.</p>
+              <p class="section-copy">Active issues, last known agent activity, token usage, and estimated price per ticket.</p>
             </div>
           </div>
+
+          <%= if @payload.pricing.model do %>
+            <p class="section-note">
+              Pricing model: <span class="mono"><%= @payload.pricing.model %></span>
+            </p>
+          <% end %>
 
           <%= if @payload.running == [] do %>
             <p class="empty-state">No active sessions.</p>
@@ -137,6 +152,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <col style="width: 8.5rem;" />
                   <col />
                   <col style="width: 10rem;" />
+                  <col style="width: 8rem;" />
                 </colgroup>
                 <thead>
                   <tr>
@@ -146,6 +162,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <th>Runtime / turns</th>
                     <th>Codex update</th>
                     <th>Tokens</th>
+                    <th>Price</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -197,6 +214,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <div class="token-stack numeric">
                         <span>Total: <%= format_int(entry.tokens.total_tokens) %></span>
                         <span class="muted">In <%= format_int(entry.tokens.input_tokens) %> / Out <%= format_int(entry.tokens.output_tokens) %></span>
+                      </div>
+                    </td>
+                    <td class="numeric">
+                      <div class="token-stack">
+                        <span><%= OpenAIPricing.display_cost(entry.pricing) %></span>
+                        <%= if entry.pricing.available do %>
+                          <span class="muted">ticket total</span>
+                        <% else %>
+                          <span class="muted">pricing unavailable</span>
+                        <% end %>
                       </div>
                     </td>
                   </tr>

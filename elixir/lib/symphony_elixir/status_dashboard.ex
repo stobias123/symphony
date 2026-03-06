@@ -391,12 +391,9 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.linear_project_slug() do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
-
-        _ ->
-          colorize("n/a", @ansi_gray)
+      case project_url() do
+        url when is_binary(url) -> colorize(url, @ansi_cyan)
+        _ -> colorize("n/a", @ansi_gray)
       end
 
     project_line = colorize("│ Project: ", @ansi_bold) <> project_part
@@ -424,7 +421,25 @@ defmodule SymphonyElixir.StatusDashboard do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
 
-  defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
+  defp project_url do
+    case Config.tracker_kind() do
+      "jira" -> jira_project_url(Config.jira_endpoint(), Config.jira_project_key())
+      _ -> linear_project_url(Config.linear_project_slug())
+    end
+  end
+
+  defp linear_project_url(project_slug) when is_binary(project_slug) and project_slug != "" do
+    "https://linear.app/project/#{project_slug}/issues"
+  end
+
+  defp linear_project_url(_project_slug), do: nil
+
+  defp jira_project_url(endpoint, project_key)
+       when is_binary(endpoint) and endpoint != "" and is_binary(project_key) and project_key != "" do
+    "#{endpoint}/jira/software/projects/#{project_key}"
+  end
+
+  defp jira_project_url(_endpoint, _project_key), do: nil
 
   defp dashboard_url do
     dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())

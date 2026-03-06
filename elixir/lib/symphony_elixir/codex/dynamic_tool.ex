@@ -57,6 +57,37 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   }
 
+  @confluence_rest_tool "confluence_rest"
+  @confluence_rest_description """
+  Execute a REST API call against Confluence using Symphony's configured auth.
+  """
+  @confluence_rest_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["method", "path"],
+    "properties" => %{
+      "method" => %{
+        "type" => "string",
+        "enum" => ["GET", "POST", "PUT", "DELETE"],
+        "description" => "HTTP method."
+      },
+      "path" => %{
+        "type" => "string",
+        "description" => "REST API path (e.g. /api/v2/pages). Appended to the configured Confluence endpoint."
+      },
+      "body" => %{
+        "type" => ["object", "null"],
+        "description" => "Optional JSON request body.",
+        "additionalProperties" => true
+      },
+      "query" => %{
+        "type" => ["object", "null"],
+        "description" => "Optional query parameters as key-value pairs.",
+        "additionalProperties" => true
+      }
+    }
+  }
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     case tool do
@@ -65,6 +96,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
       @jira_rest_tool ->
         execute_jira_rest(arguments, opts)
+
+      @confluence_rest_tool ->
+        execute_confluence_rest(arguments, opts)
 
       other ->
         failure_response(%{
@@ -79,7 +113,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @spec tool_specs() :: [map()]
   def tool_specs do
     case Config.tracker_kind() do
-      "jira" -> [jira_rest_spec()]
+      "jira" -> [jira_rest_spec(), confluence_rest_spec()]
       _ -> [linear_graphql_spec()]
     end
   end
@@ -97,6 +131,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => @jira_rest_tool,
       "description" => @jira_rest_description,
       "inputSchema" => @jira_rest_input_schema
+    }
+  end
+
+  defp confluence_rest_spec do
+    %{
+      "name" => @confluence_rest_tool,
+      "description" => @confluence_rest_description,
+      "inputSchema" => @confluence_rest_input_schema
     }
   end
 
@@ -270,6 +312,106 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     end
   end
 
+  # Confluence REST execution
+
+  defp execute_confluence_rest(arguments, opts) when is_map(arguments) do
+    request_fun = Keyword.get(opts, :confluence_request_fun, &confluence_http_request/4)
+
+    with {:ok, method} <- normalize_confluence_method(arguments),
+         {:ok, path} <- normalize_confluence_path(arguments) do
+      body = Map.get(arguments, "body") || Map.get(arguments, :body)
+      query = Map.get(arguments, "query") || Map.get(arguments, :query) || %{}
+      do_confluence_request(request_fun, method, path, body, query)
+    else
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_confluence_rest(_arguments, _opts),
+    do: failure_response(tool_error_payload(:confluence_invalid_arguments))
+
+  defp normalize_confluence_method(arguments) do
+    case Map.get(arguments, "method") || Map.get(arguments, :method) do
+      method when method in ["GET", "POST", "PUT", "DELETE"] -> {:ok, method}
+      nil -> {:error, :confluence_missing_method}
+      _ -> {:error, :confluence_invalid_method}
+    end
+  end
+
+  defp normalize_confluence_path(arguments) do
+    case Map.get(arguments, "path") || Map.get(arguments, :path) do
+      path when is_binary(path) ->
+        case String.trim(path) do
+          "" -> {:error, :confluence_missing_path}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _ ->
+        {:error, :confluence_missing_path}
+    end
+  end
+
+  defp do_confluence_request(request_fun, method, path, body, query) do
+    endpoint = Config.confluence_endpoint()
+    user = Config.confluence_user()
+    token = Config.confluence_token()
+
+    cond do
+      is_nil(endpoint) ->
+        failure_response(tool_error_payload(:missing_confluence_endpoint))
+
+      is_nil(user) ->
+        failure_response(tool_error_payload(:missing_confluence_user))
+
+      is_nil(token) ->
+        failure_response(tool_error_payload(:missing_confluence_token))
+
+      true ->
+        url = endpoint <> path
+
+        case request_fun.(method, url, body, query) do
+          {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
+            success_response(resp_body)
+
+          {:ok, %{status: status, body: resp_body}} ->
+            failure_response(%{
+              "error" => %{
+                "message" => "Confluence REST request failed with HTTP #{status}.",
+                "status" => status,
+                "body" => resp_body
+              }
+            })
+
+          {:error, reason} ->
+            failure_response(tool_error_payload({:confluence_api_request, reason}))
+        end
+    end
+  end
+
+  defp confluence_http_request(method, url, body, query) do
+    headers = confluence_auth_headers()
+    opts = [headers: headers, params: query, connect_options: [timeout: 30_000]]
+    opts = if body, do: Keyword.put(opts, :json, body), else: opts
+
+    case String.upcase(method) do
+      "GET" -> Req.get(url, opts)
+      "POST" -> Req.post(url, opts)
+      "PUT" -> Req.put(url, opts)
+      "DELETE" -> Req.delete(url, opts)
+    end
+  end
+
+  defp confluence_auth_headers do
+    encoded = Base.encode64("#{Config.confluence_user()}:#{Config.confluence_token()}")
+
+    [
+      {"Authorization", "Basic #{encoded}"},
+      {"Content-Type", "application/json"},
+      {"Accept", "application/json"}
+    ]
+  end
+
   # Shared response helpers
 
   defp success_response(body) do
@@ -408,6 +550,73 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "message" => "Jira REST request failed before receiving a successful response.",
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  # Error payloads — Confluence
+
+  defp tool_error_payload(:confluence_invalid_arguments) do
+    %{
+      "error" => %{
+        "message" => "`confluence_rest` expects an object with `method`, `path`, and optional `body`/`query`."
+      }
+    }
+  end
+
+  defp tool_error_payload(:confluence_missing_method) do
+    %{
+      "error" => %{
+        "message" => "`confluence_rest` requires a `method` (GET, POST, PUT, or DELETE)."
+      }
+    }
+  end
+
+  defp tool_error_payload(:confluence_invalid_method) do
+    %{
+      "error" => %{
+        "message" => "`confluence_rest.method` must be one of GET, POST, PUT, or DELETE."
+      }
+    }
+  end
+
+  defp tool_error_payload(:confluence_missing_path) do
+    %{
+      "error" => %{
+        "message" => "`confluence_rest` requires a non-empty `path` string."
+      }
+    }
+  end
+
+  defp tool_error_payload(:missing_confluence_endpoint) do
+    %{
+      "error" => %{
+        "message" => "Symphony is missing Confluence endpoint. Set `CONFLUENCE_ENDPOINT` or configure Jira `tracker.endpoint`."
+      }
+    }
+  end
+
+  defp tool_error_payload(:missing_confluence_user) do
+    %{
+      "error" => %{
+        "message" => "Symphony is missing Confluence auth user. Export `CONFLUENCE_USER` (or `confluence_user`)."
+      }
+    }
+  end
+
+  defp tool_error_payload(:missing_confluence_token) do
+    %{
+      "error" => %{
+        "message" => "Symphony is missing Confluence auth token. Export `CONFLUENCE_TOKEN` (or `confluence_token`)."
+      }
+    }
+  end
+
+  defp tool_error_payload({:confluence_api_request, reason}) do
+    %{
+      "error" => %{
+        "message" => "Confluence REST request failed before receiving a successful response.",
         "reason" => inspect(reason)
       }
     }

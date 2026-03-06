@@ -23,6 +23,9 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
 skills can make raw Linear GraphQL calls.
 
+For Jira tracker sessions, Symphony serves `jira_rest` and `confluence_rest` client-side tools for
+raw Jira and Confluence REST API access.
+
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
@@ -127,6 +130,10 @@ Notes:
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `confluence_rest` auth reads `CONFLUENCE_USER` and `CONFLUENCE_TOKEN` (lowercase variants
+  `confluence_user` and `confluence_token` are also accepted).
+- `confluence_rest` endpoint reads `CONFLUENCE_ENDPOINT`; if unset and `tracker.kind: jira`,
+  Symphony derives it from `tracker.endpoint` by appending `/wiki`.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

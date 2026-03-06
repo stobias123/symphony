@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.{Config, OpenAIPricing, Orchestrator, StatusDashboard}
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -11,13 +11,21 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
+        model = configured_model(snapshot)
+        total_pricing = OpenAIPricing.estimate(model, snapshot.codex_totals)
+
         %{
           generated_at: generated_at,
+          pricing: %{
+            model: model,
+            totals: total_pricing,
+            note: pricing_note(total_pricing)
+          },
           counts: %{
             running: length(snapshot.running),
             retrying: length(snapshot.retrying)
           },
-          running: Enum.map(snapshot.running, &running_entry_payload/1),
+          running: Enum.map(snapshot.running, &running_entry_payload(&1, model)),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           codex_totals: snapshot.codex_totals,
           rate_limits: snapshot.rate_limits
@@ -41,7 +49,7 @@ defmodule SymphonyElixirWeb.Presenter do
         if is_nil(running) and is_nil(retry) do
           {:error, :issue_not_found}
         else
-          {:ok, issue_payload_body(issue_identifier, running, retry)}
+          {:ok, issue_payload_body(issue_identifier, running, retry, configured_model(snapshot))}
         end
 
       _ ->
@@ -60,7 +68,7 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp issue_payload_body(issue_identifier, running, retry) do
+  defp issue_payload_body(issue_identifier, running, retry, model) do
     %{
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry),
@@ -72,7 +80,11 @@ defmodule SymphonyElixirWeb.Presenter do
         restart_count: restart_count(retry),
         current_retry_attempt: retry_attempt(retry)
       },
-      running: running && running_issue_payload(running),
+      pricing: %{
+        model: model,
+        totals: running && OpenAIPricing.estimate(model, running_tokens(running))
+      },
+      running: running && running_issue_payload(running, model),
       retry: retry && retry_issue_payload(retry),
       logs: %{
         codex_session_logs: []
@@ -94,7 +106,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp issue_status(nil, _retry), do: "retrying"
   defp issue_status(_running, _retry), do: "running"
 
-  defp running_entry_payload(entry) do
+  defp running_entry_payload(entry, model) do
+    tokens = running_tokens(entry)
+
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
@@ -105,11 +119,8 @@ defmodule SymphonyElixirWeb.Presenter do
       last_message: summarize_message(entry.last_codex_message),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
-      tokens: %{
-        input_tokens: entry.codex_input_tokens,
-        output_tokens: entry.codex_output_tokens,
-        total_tokens: entry.codex_total_tokens
-      }
+      tokens: tokens,
+      pricing: OpenAIPricing.estimate(model, tokens)
     }
   end
 
@@ -123,7 +134,9 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  defp running_issue_payload(running) do
+  defp running_issue_payload(running, model) do
+    tokens = running_tokens(running)
+
     %{
       session_id: running.session_id,
       turn_count: Map.get(running, :turn_count, 0),
@@ -132,11 +145,8 @@ defmodule SymphonyElixirWeb.Presenter do
       last_event: running.last_codex_event,
       last_message: summarize_message(running.last_codex_message),
       last_event_at: iso8601(running.last_codex_timestamp),
-      tokens: %{
-        input_tokens: running.codex_input_tokens,
-        output_tokens: running.codex_output_tokens,
-        total_tokens: running.codex_total_tokens
-      }
+      tokens: tokens,
+      pricing: OpenAIPricing.estimate(model, tokens)
     }
   end
 
@@ -161,6 +171,30 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
+
+  defp running_tokens(running) do
+    %{
+      input_tokens: running.codex_input_tokens,
+      output_tokens: running.codex_output_tokens,
+      total_tokens: running.codex_total_tokens
+    }
+  end
+
+  defp configured_model(snapshot) do
+    Config.codex_model() || rate_limit_model(snapshot.rate_limits)
+  end
+
+  defp rate_limit_model(rate_limits) when is_map(rate_limits) do
+    Map.get(rate_limits, :limit_id) || Map.get(rate_limits, "limit_id")
+  end
+
+  defp rate_limit_model(_rate_limits), do: nil
+
+  defp pricing_note(%{available: true, cached_input_discount_applied: false}) do
+    "Estimated from published input/output token rates; cached-input discounts are excluded."
+  end
+
+  defp pricing_note(_pricing), do: "Pricing unavailable for the configured model."
 
   defp due_at_iso8601(due_in_ms) when is_integer(due_in_ms) do
     DateTime.utc_now()
