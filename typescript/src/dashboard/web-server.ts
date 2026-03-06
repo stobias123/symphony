@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { logger } from "../logger.js";
 import type { OrchestratorSnapshot } from "../orchestrator.js";
+import type { SessionStore } from "../session-store.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -32,6 +33,7 @@ function toApiPayload(snap: OrchestratorSnapshot) {
       lastEvent: r.lastEvent,
       stage: r.stage,
       messages: r.messages,
+      estimatedCostUsd: r.estimatedCostUsd,
     })),
     retrying: snap.retrying.map((r) => ({
       issueId: r.issueId,
@@ -45,6 +47,8 @@ function toApiPayload(snap: OrchestratorSnapshot) {
       outputTokens: snap.codexTotals.outputTokens ?? 0,
       totalTokens: snap.codexTotals.totalTokens ?? 0,
     },
+    cumulativeTotals: snap.cumulativeTotals,
+    totalCostUsd: snap.totalCostUsd,
     polling: snap.polling,
     startedAt: snap.startedAt.toISOString(),
     provider: snap.provider,
@@ -57,18 +61,25 @@ export class WebDashboardServer {
   private sseInterval: ReturnType<typeof setInterval> | null = null;
   private getSnapshot: () => OrchestratorSnapshot;
   private triggerRefresh?: () => void;
+  private sessionStore?: SessionStore;
   private staticDir: string;
   private port: number;
   private host: string;
 
+  private getContentMessages?: (identifier: string) => import("../providers/types.js").ContentMessage[] | null;
+
   constructor(opts: {
     getSnapshot: () => OrchestratorSnapshot;
     triggerRefresh?: () => void;
+    sessionStore?: SessionStore;
+    getContentMessages?: (identifier: string) => import("../providers/types.js").ContentMessage[] | null;
     port?: number;
     host?: string;
   }) {
     this.getSnapshot = opts.getSnapshot;
     this.triggerRefresh = opts.triggerRefresh;
+    this.sessionStore = opts.sessionStore;
+    this.getContentMessages = opts.getContentMessages;
     this.port = opts.port ?? 0;
     this.host = opts.host ?? "127.0.0.1";
     // When running from dist/, static/ is a sibling. When running via tsx from src/,
@@ -167,6 +178,51 @@ export class WebDashboardServer {
       }
       res.writeHead(202, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "accepted" }));
+      return;
+    }
+
+    // Session messages for completed sessions: /api/v1/sessions/:id/messages
+    const sessionMsgMatch = url.match(/^\/api\/v1\/sessions\/(\d+)\/messages$/);
+    if (sessionMsgMatch && method === "GET") {
+      if (this.sessionStore) {
+        const sessionId = parseInt(sessionMsgMatch[1]!, 10);
+        const messages = this.sessionStore.getSessionMessages(sessionId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ messages }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ messages: [] }));
+      }
+      return;
+    }
+
+    if (url.startsWith("/api/v1/sessions") && method === "GET") {
+      if (this.sessionStore) {
+        const params = new URL(url, "http://localhost").searchParams;
+        const limit = Math.min(Math.max(parseInt(params.get("limit") ?? "50", 10) || 50, 1), 200);
+        const offset = Math.max(parseInt(params.get("offset") ?? "0", 10) || 0, 0);
+        const sessions = this.sessionStore.getSessions({ limit, offset });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sessions }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sessions: [] }));
+      }
+      return;
+    }
+
+    // Content messages for running sessions: /api/v1/running/:identifier/messages
+    const runningMsgMatch = url.match(/^\/api\/v1\/running\/([^/]+)\/messages$/);
+    if (runningMsgMatch && method === "GET") {
+      const identifier = decodeURIComponent(runningMsgMatch[1]!);
+      const messages = this.getContentMessages?.(identifier) ?? null;
+      if (messages) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ messages }));
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+      }
       return;
     }
 

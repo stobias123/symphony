@@ -18,6 +18,9 @@ export interface TokenUsage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+  costUsd?: number;
 }
 
 export interface TurnOptions {
@@ -49,6 +52,14 @@ export interface SessionConfig {
   approvalPolicy: string | Record<string, unknown>;
   threadSandbox: string;
   turnSandboxPolicy: Record<string, unknown>;
+}
+
+export interface ContentMessage {
+  role: "assistant" | "tool_use" | "tool_result" | "system";
+  timestamp: string;
+  text?: string;
+  toolName?: string;
+  toolInput?: string;
 }
 
 export interface AgentProvider {

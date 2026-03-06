@@ -101,15 +101,23 @@ export class ClaudeProvider implements AgentProvider {
 
         // Emit assistant text progress
         if (message.type === "assistant" && "message" in message) {
-          const msg = message.message as { content?: Array<{ type: string; text?: string }> };
-          const text = msg.content
-            ?.filter((b) => b.type === "text")
-            .map((b) => b.text ?? "")
-            .join("");
+          const msg = message.message as { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
+          const textParts = msg.content?.filter((b) => b.type === "text") ?? [];
+          const text = textParts.map((b) => b.text ?? "").join("");
           if (text) {
             emitMessage(onMessage, "assistant_message", {
               sessionId,
               text: text.slice(0, 500),
+              fullText: text,
+            });
+          }
+          // Emit tool_use blocks from the assistant message
+          const toolUseParts = msg.content?.filter((b) => b.type === "tool_use") ?? [];
+          for (const tu of toolUseParts) {
+            emitMessage(onMessage, "tool_use", {
+              sessionId,
+              toolName: tu.name,
+              toolInput: typeof tu.input === "string" ? tu.input : JSON.stringify(tu.input),
             });
           }
         }
@@ -133,6 +141,9 @@ export class ClaudeProvider implements AgentProvider {
                 inputTokens: usageData.input_tokens ?? 0,
                 outputTokens: usageData.output_tokens ?? 0,
                 totalTokens: (usageData.input_tokens ?? 0) + (usageData.output_tokens ?? 0),
+                cacheReadTokens: usageData.cache_read_input_tokens ?? 0,
+                cacheCreateTokens: usageData.cache_creation_input_tokens ?? 0,
+                costUsd: typeof result.total_cost_usd === "number" ? result.total_cost_usd : undefined,
               },
             });
           }

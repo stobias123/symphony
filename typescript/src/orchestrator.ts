@@ -1,8 +1,10 @@
-import type { AgentProvider, AgentMessage, TokenUsage } from "./providers/types.js";
+import type { AgentProvider, AgentMessage, TokenUsage, ContentMessage } from "./providers/types.js";
 import type { Tracker, Issue } from "./trackers/types.js";
 import type { Config } from "./config.js";
+import type { SessionStore, CumulativeTotals } from "./session-store.js";
 import { AgentRunner } from "./agent-runner.js";
 import { Workspace } from "./workspace.js";
+import { estimateCost } from "./pricing.js";
 import { logger } from "./logger.js";
 
 export interface SessionMessage {
@@ -60,7 +62,11 @@ interface RunningEntry {
   lastEvent: string;
   stage: "running" | "retrying" | "starting";
   messages: SessionMessage[];
+  contentMessages: ContentMessage[];
+  persisted: boolean;
 }
+
+const MAX_CONTENT_MESSAGES = 500;
 
 interface RetryEntry {
   issueId: string;
@@ -84,6 +90,7 @@ export interface OrchestratorSnapshot {
     lastEvent: string;
     stage: "running" | "retrying" | "starting";
     messages: SessionMessage[];
+    estimatedCostUsd: number;
   }>;
   retrying: Array<{
     issueId: string;
@@ -93,6 +100,8 @@ export interface OrchestratorSnapshot {
     error?: string;
   }>;
   codexTotals: TokenUsage;
+  cumulativeTotals: CumulativeTotals;
+  totalCostUsd: number;
   polling: { intervalMs: number; maxAgents: number; nextPollAtMs: number; inProgress: boolean };
   startedAt: Date;
   provider: string;
@@ -104,6 +113,7 @@ export class Orchestrator {
   private provider: AgentProvider;
   private runner: AgentRunner;
   private workspace: Workspace;
+  private sessionStore?: SessionStore;
 
   private running = new Map<string, RunningEntry>();
   private completed = new Set<string>();
@@ -120,12 +130,23 @@ export class Orchestrator {
     config: Config,
     tracker: Tracker,
     provider: AgentProvider,
+    sessionStore?: SessionStore,
   ) {
     this.config = config;
     this.tracker = tracker;
     this.provider = provider;
+    this.sessionStore = sessionStore;
     this.workspace = new Workspace(config);
     this.runner = new AgentRunner(config, provider, tracker, this.workspace);
+
+    // Hydrate completed set from DB
+    if (this.sessionStore) {
+      const completedIds = this.sessionStore.getCompletedIssueIds();
+      for (const id of completedIds) {
+        this.completed.add(id);
+      }
+      logger.info({ count: completedIds.size }, "Hydrated completed issues from DB");
+    }
   }
 
   start(): void {
@@ -157,17 +178,31 @@ export class Orchestrator {
     }
     this.retryAttempts.clear();
 
-    // Abort all running agents
+    // Persist all running sessions before aborting (they won't get a chance to persist in .catch)
     for (const [, entry] of this.running) {
+      this.persistSession(entry, "aborted");
       entry.abortController.abort();
     }
+    this.running.clear();
 
     logger.info("Orchestrator stopped");
   }
 
   snapshot(): OrchestratorSnapshot {
-    return {
-      running: Array.from(this.running.values()).map((e) => ({
+    const cumulativeTotals = this.sessionStore?.getCumulativeTotals() ?? {
+      sessionCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+      cacheReadTokens: 0, cacheCreateTokens: 0, costUsd: 0,
+    };
+
+    const model = this.config.claudeModel ?? "";
+    const runningEntries = Array.from(this.running.values()).map((e) => {
+      const entryCost = e.totalUsage.costUsd ?? estimateCost(model, {
+        inputTokens: e.totalUsage.inputTokens,
+        outputTokens: e.totalUsage.outputTokens,
+        cacheReadTokens: e.totalUsage.cacheReadTokens,
+        cacheCreateTokens: e.totalUsage.cacheCreateTokens,
+      });
+      return {
         issueId: e.issueId,
         identifier: e.identifier,
         state: e.state,
@@ -179,7 +214,21 @@ export class Orchestrator {
         lastEvent: e.lastEvent,
         stage: e.stage,
         messages: [...e.messages],
-      })),
+        estimatedCostUsd: entryCost,
+      };
+    });
+
+    const runningCostSum = runningEntries.reduce((sum, e) => sum + e.estimatedCostUsd, 0);
+    // codexTotals = sum of currently-running session tokens (not cumulative across process lifetime)
+    const runningTotals: TokenUsage = {};
+    for (const e of runningEntries) {
+      runningTotals.inputTokens = (runningTotals.inputTokens ?? 0) + (e.usage.inputTokens ?? 0);
+      runningTotals.outputTokens = (runningTotals.outputTokens ?? 0) + (e.usage.outputTokens ?? 0);
+      runningTotals.totalTokens = (runningTotals.totalTokens ?? 0) + (e.usage.totalTokens ?? 0);
+    }
+
+    return {
+      running: runningEntries,
       retrying: Array.from(this.retryAttempts.values()).map((e) => ({
         issueId: e.issueId,
         identifier: e.identifier,
@@ -187,7 +236,9 @@ export class Orchestrator {
         dueAtMs: e.dueAtMs,
         error: e.error,
       })),
-      codexTotals: { ...this.codexTotals },
+      codexTotals: runningTotals,
+      cumulativeTotals,
+      totalCostUsd: cumulativeTotals.costUsd + runningCostSum,
       polling: {
         intervalMs: this.config.pollIntervalMs,
         maxAgents: this.config.maxConcurrentAgents,
@@ -197,6 +248,15 @@ export class Orchestrator {
       startedAt: this.orchestratorStartedAt,
       provider: this.provider.name,
     };
+  }
+
+  getContentMessages(identifier: string): ContentMessage[] | null {
+    for (const entry of this.running.values()) {
+      if (entry.identifier === identifier) {
+        return [...entry.contentMessages];
+      }
+    }
+    return null;
   }
 
   requestRefresh(): void {
@@ -420,6 +480,8 @@ export class Orchestrator {
       lastEvent: "starting",
       stage: attempt > 1 ? "retrying" : "starting",
       messages: [],
+      contentMessages: [],
+      persisted: false,
     };
 
     const onMessage = (msg: AgentMessage & { turnNumber?: number }) => {
@@ -434,6 +496,24 @@ export class Orchestrator {
         });
         if (entry.messages.length > MAX_SESSION_MESSAGES) entry.messages.shift();
       }
+      // Capture content messages for session detail view
+      if (msg.event === "assistant_message" && msg.fullText) {
+        entry.contentMessages.push({
+          role: "assistant",
+          timestamp: msg.timestamp.toISOString(),
+          text: msg.fullText as string,
+        });
+        if (entry.contentMessages.length > MAX_CONTENT_MESSAGES) entry.contentMessages.shift();
+      } else if (msg.event === "tool_use") {
+        entry.contentMessages.push({
+          role: "tool_use",
+          timestamp: msg.timestamp.toISOString(),
+          toolName: msg.toolName as string,
+          toolInput: msg.toolInput as string,
+        });
+        if (entry.contentMessages.length > MAX_CONTENT_MESSAGES) entry.contentMessages.shift();
+      }
+
       if (typeof msg.turnNumber === "number") {
         entry.turnNumber = msg.turnNumber;
       }
@@ -453,6 +533,7 @@ export class Orchestrator {
           { issueId: issue.id, identifier: issue.identifier },
           "Agent completed",
         );
+        this.persistSession(entry, "completed");
         this.running.delete(issue.id);
         this.completed.add(issue.id);
       })
@@ -462,11 +543,13 @@ export class Orchestrator {
             { issueId: issue.id, identifier: issue.identifier },
             "Agent aborted",
           );
+          this.persistSession(entry, "aborted");
         } else {
           logger.error(
             { err, issueId: issue.id, identifier: issue.identifier },
             "Agent failed",
           );
+          this.persistSession(entry, "failed");
           this.scheduleRetry(issue.id, issue.identifier, attempt + 1, String(err));
         }
         this.running.delete(issue.id);
@@ -544,6 +627,13 @@ export class Orchestrator {
       (entry.totalUsage.outputTokens ?? 0) + (usage.outputTokens ?? 0);
     entry.totalUsage.totalTokens =
       (entry.totalUsage.totalTokens ?? 0) + (usage.totalTokens ?? 0);
+    entry.totalUsage.cacheReadTokens =
+      (entry.totalUsage.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0);
+    entry.totalUsage.cacheCreateTokens =
+      (entry.totalUsage.cacheCreateTokens ?? 0) + (usage.cacheCreateTokens ?? 0);
+    if (usage.costUsd != null) {
+      entry.totalUsage.costUsd = (entry.totalUsage.costUsd ?? 0) + usage.costUsd;
+    }
 
     this.codexTotals.inputTokens =
       (this.codexTotals.inputTokens ?? 0) + (usage.inputTokens ?? 0);
@@ -551,5 +641,49 @@ export class Orchestrator {
       (this.codexTotals.outputTokens ?? 0) + (usage.outputTokens ?? 0);
     this.codexTotals.totalTokens =
       (this.codexTotals.totalTokens ?? 0) + (usage.totalTokens ?? 0);
+  }
+
+  private persistSession(
+    entry: RunningEntry,
+    outcome: "completed" | "failed" | "aborted",
+  ): void {
+    if (!this.sessionStore) return;
+    if (entry.persisted) return;
+    entry.persisted = true;
+
+    const model = this.config.claudeModel ?? "";
+    const costUsd = entry.totalUsage.costUsd ?? estimateCost(model, {
+      inputTokens: entry.totalUsage.inputTokens,
+      outputTokens: entry.totalUsage.outputTokens,
+      cacheReadTokens: entry.totalUsage.cacheReadTokens,
+      cacheCreateTokens: entry.totalUsage.cacheCreateTokens,
+    });
+
+    try {
+      this.sessionStore.insertSession({
+        issueId: entry.issueId,
+        identifier: entry.identifier,
+        title: entry.title,
+        state: entry.state,
+        outcome,
+        model: model || undefined,
+        startedAt: entry.startedAt.toISOString(),
+        endedAt: new Date().toISOString(),
+        turns: entry.turnNumber,
+        inputTokens: entry.totalUsage.inputTokens ?? 0,
+        outputTokens: entry.totalUsage.outputTokens ?? 0,
+        totalTokens: entry.totalUsage.totalTokens ?? 0,
+        cacheReadTokens: entry.totalUsage.cacheReadTokens ?? 0,
+        cacheCreateTokens: entry.totalUsage.cacheCreateTokens ?? 0,
+        costUsd,
+        messages: [...entry.messages],
+      }, entry.contentMessages);
+      logger.info(
+        { issueId: entry.issueId, identifier: entry.identifier, outcome, costUsd },
+        "Session persisted to DB",
+      );
+    } catch (err) {
+      logger.error({ err, issueId: entry.issueId }, "Failed to persist session");
+    }
   }
 }

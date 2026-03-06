@@ -443,6 +443,128 @@ pre,
   min-width: 0;
 }
 
+/* Detail link in tables */
+.detail-link {
+  margin-left: 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  opacity: 0.7;
+  transition: opacity 140ms ease;
+}
+
+.detail-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* Session transcript */
+.session-transcript {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.transcript-msg {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  background: var(--page-soft);
+}
+
+.transcript-msg-assistant {
+  background: var(--card);
+  border-color: rgba(217, 217, 227, 0.82);
+}
+
+.transcript-msg-tool_use {
+  background: #f8f9fb;
+  border-color: #c7d7fe;
+}
+
+.transcript-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.transcript-role {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.transcript-role-assistant {
+  background: var(--accent-soft);
+  border: 1px solid rgba(16, 163, 127, 0.18);
+  color: var(--accent-ink);
+}
+
+.transcript-role-tool_use {
+  background: #eef4ff;
+  border: 1px solid #c7d7fe;
+  color: #3538cd;
+}
+
+.transcript-role-system {
+  background: var(--card-muted);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.transcript-tool-name {
+  font-family: "Sohne Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.transcript-ts {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.transcript-text {
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--ink);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.transcript-text-tool {
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-height: 200px;
+  background: var(--page);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.transcript-tool-details {
+  margin-top: 0.25rem;
+}
+
+.transcript-tool-details summary {
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.transcript-tool-details summary:hover {
+  color: var(--accent);
+}
+
 @media (max-width: 860px) {
   .app-shell {
     padding: 1rem 0.85rem 2rem;

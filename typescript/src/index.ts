@@ -7,6 +7,7 @@ import { Config } from "./config.js";
 import { createTracker } from "./trackers/index.js";
 import { createProvider } from "./providers/index.js";
 import { Orchestrator } from "./orchestrator.js";
+import { SessionStore } from "./session-store.js";
 import { StatusReporter } from "./dashboard/status-reporter.js";
 import { WebDashboardServer } from "./dashboard/web-server.js";
 import { logger, setupDashboardLogging } from "./logger.js";
@@ -74,7 +75,11 @@ Set agent.provider to "codex" or "claude" to select the model provider.
     "Symphony starting",
   );
 
-  const orchestrator = new Orchestrator(config, tracker, provider);
+  const dbPath = path.join(config.workspaceRoot, ".symphony.db");
+  const sessionStore = new SessionStore(dbPath);
+  logger.info({ dbPath }, "Session store initialized");
+
+  const orchestrator = new Orchestrator(config, tracker, provider, sessionStore);
 
   // Status reporter — redirect logs to file when dashboard is active
   const logFile = setupDashboardLogging(values["logs-root"] ?? undefined);
@@ -89,6 +94,8 @@ Set agent.provider to "codex" or "claude" to select the model provider.
   // Web dashboard server
   const webServer = new WebDashboardServer({
     getSnapshot: () => orchestrator.snapshot(),
+    sessionStore,
+    getContentMessages: (identifier) => orchestrator.getContentMessages(identifier),
     port: config.serverPort,
     host: config.serverHost,
   });
@@ -103,6 +110,7 @@ Set agent.provider to "codex" or "claude" to select the model provider.
     reporter.stop();
     webServer.stop();
     workflow.stopWatching();
+    sessionStore.close();
     process.exit(0);
   };
 
