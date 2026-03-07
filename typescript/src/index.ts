@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { Workflow } from "./workflow.js";
 import { Config } from "./config.js";
 import { createTracker } from "./trackers/index.js";
@@ -77,9 +78,11 @@ Set agent.provider to "codex" or "claude" to select the model provider.
     "Symphony starting",
   );
 
-  const dbDir = config.workspaceRoot;
+  const dbDir = config.workspaceRoot || path.join(os.tmpdir(), "symphony_workspaces");
+  console.log(`[symphony] workspace root: ${dbDir}`);
   fs.mkdirSync(dbDir, { recursive: true });
   const dbPath = path.join(dbDir, ".symphony.db");
+  console.log(`[symphony] opening database: ${dbPath}`);
   const sessionStore = new SessionStore(dbPath);
   logger.info({ dbPath }, "Session store initialized");
 
@@ -125,7 +128,11 @@ Set agent.provider to "codex" or "claude" to select the model provider.
 }
 
 main().catch((err) => {
-  const msg = err instanceof Error ? err.message : String(err);
-  console.error(`Fatal: ${msg}`);
+  if (err instanceof Error) {
+    console.error(`Fatal: ${err.message}`);
+    console.error(err.stack);
+  } else {
+    console.error(`Fatal: ${String(err)}`);
+  }
   process.exit(1);
 });
