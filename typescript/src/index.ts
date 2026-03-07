@@ -2,6 +2,7 @@
 
 import { parseArgs } from "node:util";
 import path from "node:path";
+import fs from "node:fs";
 import { Workflow } from "./workflow.js";
 import { Config } from "./config.js";
 import { createTracker } from "./trackers/index.js";
@@ -76,7 +77,9 @@ Set agent.provider to "codex" or "claude" to select the model provider.
     "Symphony starting",
   );
 
-  const dbPath = path.join(config.workspaceRoot, ".symphony.db");
+  const dbDir = config.workspaceRoot;
+  fs.mkdirSync(dbDir, { recursive: true });
+  const dbPath = path.join(dbDir, ".symphony.db");
   const sessionStore = new SessionStore(dbPath);
   logger.info({ dbPath }, "Session store initialized");
 
