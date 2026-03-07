@@ -94,18 +94,42 @@ export class WebDashboardServer {
     const server = createServer((req, res) => this.handleRequest(req, res));
     this.server = server;
 
-    return new Promise((resolve, reject) => {
-      server.on("error", reject);
-      server.listen(this.port, this.host, () => {
+    const maxAttempts = 10;
+    let port = this.port;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onError = (err: NodeJS.ErrnoException) => {
+            server.removeListener("error", onError);
+            reject(err);
+          };
+          server.on("error", onError);
+          server.listen(port, this.host, () => {
+            server.removeListener("error", onError);
+            resolve();
+          });
+        });
+
         const addr = server.address();
         if (addr && typeof addr === "object") {
           this.port = addr.port;
           this.host = addr.address;
         }
         this.startSSEBroadcast();
-        resolve({ port: this.port, host: this.host });
-      });
-    });
+        return { port: this.port, host: this.host };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EADDRINUSE" && attempt < maxAttempts - 1) {
+          logger.warn({ port }, "Port in use, trying next port");
+          port++;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw new Error(`Could not find an available port (tried ${this.port}–${port})`);
   }
 
   stop(): void {

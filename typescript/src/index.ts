@@ -58,7 +58,8 @@ Set agent.provider to "codex" or "claude" to select the model provider.
   try {
     config.validate();
   } catch (err) {
-    logger.fatal({ err }, "Configuration validation failed");
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Fatal: ${msg}`);
     process.exit(1);
   }
 
@@ -121,6 +122,7 @@ Set agent.provider to "codex" or "claude" to select the model provider.
 }
 
 main().catch((err) => {
-  logger.fatal({ err }, "Fatal error");
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`Fatal: ${msg}`);
   process.exit(1);
 });

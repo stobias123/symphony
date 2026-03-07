@@ -43,6 +43,7 @@ const trackerSchema = z.object({
   assignee: z.string().optional(),
   active_states: z.array(z.string()).default(DEFAULT_ACTIVE_STATES),
   terminal_states: z.array(z.string()).default(DEFAULT_TERMINAL_STATES),
+  labels: z.array(z.string()).default([]),
 });
 
 const pollingSchema = z.object({
@@ -204,6 +205,10 @@ export class Config {
 
   get jiraAssignee(): string | undefined {
     return resolveEnvValue(this.config.tracker.assignee, process.env.JIRA_ASSIGNEE);
+  }
+
+  get jiraLabels(): string[] {
+    return this.config.tracker.labels;
   }
 
   get jiraEmail(): string | undefined {

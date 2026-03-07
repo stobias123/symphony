@@ -16,7 +16,7 @@ export class JiraClient {
     if (!projectKey) throw new Error("Missing Jira project key");
 
     const states = this.config.trackerActiveStates;
-    const jql = buildJql(projectKey, states, this.config.jiraAssignee);
+    const jql = buildJql(projectKey, states, this.config.jiraAssignee, this.config.jiraLabels);
     return this.searchIssues(jql);
   }
 
@@ -24,7 +24,7 @@ export class JiraClient {
     const projectKey = this.config.jiraProjectKey;
     if (!projectKey) throw new Error("Missing Jira project key");
 
-    const jql = buildJql(projectKey, states);
+    const jql = buildJql(projectKey, states, undefined, this.config.jiraLabels);
     return this.searchIssues(jql);
   }
 
@@ -169,7 +169,7 @@ export class JiraClient {
   }
 }
 
-function buildJql(projectKey: string, states: string[], assignee?: string): string {
+function buildJql(projectKey: string, states: string[], assignee?: string, labels?: string[]): string {
   const stateList = states.map((s) => `"${s}"`).join(",");
   let jql = `project = "${projectKey}" AND status in (${stateList})`;
 
@@ -177,6 +177,11 @@ function buildJql(projectKey: string, states: string[], assignee?: string): stri
     const assigneeValue =
       assignee.toLowerCase() === "me" ? "currentUser()" : `"${assignee}"`;
     jql += ` AND assignee = ${assigneeValue}`;
+  }
+
+  if (labels && labels.length > 0) {
+    const labelClauses = labels.map((l) => `labels = "${l}"`).join(" OR ");
+    jql += labels.length === 1 ? ` AND ${labelClauses}` : ` AND (${labelClauses})`;
   }
 
   jql += " ORDER BY priority ASC, updated DESC";
