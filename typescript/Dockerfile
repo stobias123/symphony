@@ -23,17 +23,29 @@ RUN npx tsc \
     && npm --prefix web run build \
     && npm prune --omit=dev
 
-FROM node:22-bookworm-slim
+FROM debian:bookworm-slim
 
+ARG NODE_MAJOR=22
 ARG CODEX_CLI_VERSION=0.114.0
 
 ENV HOME=/home/symphony \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    PATH=/opt/symphony/bin:${PATH}
+    PATH=/opt/symphony/bin:/usr/local/bin:${PATH}
+
+RUN groupadd -g 1000 symphony \
+    && useradd -u 1000 -g symphony -d /home/symphony -s /bin/bash symphony
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates git openssh-client \
+    && apt-get install -y --no-install-recommends \
+       bash ca-certificates curl git gnupg openssh-client \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
     && npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && npx playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
@@ -106,7 +118,7 @@ EOF
 
 RUN chmod +x /opt/symphony/bin/container-entrypoint.sh
 
-USER 1000:1000
+USER symphony
 WORKDIR /home/symphony
 
 ENTRYPOINT ["/opt/symphony/bin/container-entrypoint.sh"]
