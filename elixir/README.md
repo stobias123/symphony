@@ -177,6 +177,11 @@ The observability UI now runs on a minimal Phoenix stack:
 make all
 ```
 
+## Kubernetes / Terraform
+
+Deployment assets now live in the separate infrastructure repo at
+`/home/stobias/repos/skyguys/apps/sandbox-ai/symphony`.
+
 ## FAQ
 
 ### Why Elixir?

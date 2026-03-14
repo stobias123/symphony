@@ -99,6 +99,12 @@ const serverSchema = z.object({
   host: z.string().default(DEFAULT_SERVER_HOST),
 });
 
+const mcpServerEntrySchema = z.object({
+  command: z.string(),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({}),
+});
+
 export const WorkflowConfigSchema = z.object({
   tracker: trackerSchema,
   polling: pollingSchema,
@@ -109,6 +115,7 @@ export const WorkflowConfigSchema = z.object({
   hooks: hooksSchema,
   observability: observabilitySchema,
   server: serverSchema,
+  mcp_servers: z.record(z.string(), mcpServerEntrySchema).default({}),
 });
 
 export type WorkflowConfig = z.infer<typeof WorkflowConfigSchema>;
@@ -144,7 +151,7 @@ export class Config {
     // Pre-fill missing sections with empty objects so inner field defaults apply
     const sections = [
       "tracker", "polling", "workspace", "agent", "codex",
-      "claude", "hooks", "observability", "server",
+      "claude", "hooks", "observability", "server", "mcp_servers",
     ];
     for (const key of sections) {
       if (!(key in raw) || raw[key] == null) {
@@ -369,6 +376,10 @@ export class Config {
 
   get serverHost(): string {
     return this.config.server.host;
+  }
+
+  get mcpServers(): Record<string, { command: string; args: string[]; env: Record<string, string> }> {
+    return this.config.mcp_servers;
   }
 
   validate(): void {

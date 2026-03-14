@@ -1,4 +1,4 @@
-import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { query, tool, createSdkMcpServer, type McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentProvider,
   AgentSession,
@@ -64,7 +64,7 @@ export class ClaudeProvider implements AgentProvider {
       turnId,
     });
 
-    const mcpServer = this.buildMcpServer();
+    const mcpServers = this.buildMcpServers();
     const env = this.buildEnv();
 
     let sdkSessionId: string | undefined;
@@ -74,12 +74,8 @@ export class ClaudeProvider implements AgentProvider {
         model: this.config.claudeModel,
         cwd: state.workspace,
         permissionMode: this.config.claudePermissionMode,
-        allowedTools: [
-          "Read", "Write", "Edit", "Bash", "Glob", "Grep",
-          ...this.mcpToolNames(),
-        ],
         env,
-        ...(mcpServer ? { mcpServers: { "symphony-tools": mcpServer } } : {}),
+        ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
         ...(state.sessionId ? { resume: state.sessionId } : {}),
         ...(this.config.claudeSystemPrompt
           ? { systemPrompt: this.config.claudeSystemPrompt }
@@ -174,59 +170,69 @@ export class ClaudeProvider implements AgentProvider {
     this.sessions.delete(session.id);
   }
 
-  private buildMcpServer() {
+  private buildMcpServers(): Record<string, McpServerConfig> {
+    const servers: Record<string, McpServerConfig> = {};
+
+    // Built-in symphony-tools MCP server
     const specs = getToolSpecs(this.config.trackerKind);
-    if (specs.length === 0) return null;
+    if (specs.length > 0) {
+      const tools = specs.map((spec) => {
+        const properties = (spec.inputSchema as Record<string, unknown>).properties as
+          | Record<string, Record<string, unknown>>
+          | undefined;
+        const required = ((spec.inputSchema as Record<string, unknown>).required as string[]) ?? [];
 
-    const tools = specs.map((spec) => {
-      const properties = (spec.inputSchema as Record<string, unknown>).properties as
-        | Record<string, Record<string, unknown>>
-        | undefined;
-      const required = ((spec.inputSchema as Record<string, unknown>).required as string[]) ?? [];
-
-      const shape: Record<string, z.ZodType> = {};
-      if (properties) {
-        for (const [key, prop] of Object.entries(properties)) {
-          let fieldSchema: z.ZodType;
-          if (prop.type === "string") {
-            fieldSchema = z.string().describe((prop.description as string) ?? "");
-          } else if (prop.type === "object") {
-            fieldSchema = z.record(z.string(), z.unknown()).describe((prop.description as string) ?? "");
-          } else {
-            fieldSchema = z.unknown();
+        const shape: Record<string, z.ZodType> = {};
+        if (properties) {
+          for (const [key, prop] of Object.entries(properties)) {
+            let fieldSchema: z.ZodType;
+            if (prop.type === "string") {
+              fieldSchema = z.string().describe((prop.description as string) ?? "");
+            } else if (prop.type === "object") {
+              fieldSchema = z.record(z.string(), z.unknown()).describe((prop.description as string) ?? "");
+            } else {
+              fieldSchema = z.unknown();
+            }
+            if (!required.includes(key)) {
+              fieldSchema = fieldSchema.optional();
+            }
+            shape[key] = fieldSchema;
           }
-          if (!required.includes(key)) {
-            fieldSchema = fieldSchema.optional();
-          }
-          shape[key] = fieldSchema;
         }
-      }
 
-      return tool(
-        spec.name,
-        spec.description,
-        shape,
-        async (args: Record<string, unknown>) => {
-          const result = await this.toolExecutor.execute(spec.name, args);
-          return {
-            content: result.contentItems.map((item) => ({
-              type: "text" as const,
-              text: item.text,
-            })),
-          };
-        },
-      );
-    });
+        return tool(
+          spec.name,
+          spec.description,
+          shape,
+          async (args: Record<string, unknown>) => {
+            const result = await this.toolExecutor.execute(spec.name, args);
+            return {
+              content: result.contentItems.map((item) => ({
+                type: "text" as const,
+                text: item.text,
+              })),
+            };
+          },
+        );
+      });
 
-    return createSdkMcpServer({
-      name: "symphony-tools",
-      tools,
-    });
-  }
+      servers["symphony-tools"] = createSdkMcpServer({
+        name: "symphony-tools",
+        tools,
+      });
+    }
 
-  private mcpToolNames(): string[] {
-    const specs = getToolSpecs(this.config.trackerKind);
-    return specs.map((s) => `mcp__symphony-tools__${s.name}`);
+    // External MCP servers from config
+    for (const [name, entry] of Object.entries(this.config.mcpServers)) {
+      servers[name] = {
+        type: "stdio" as const,
+        command: entry.command,
+        args: entry.args,
+        env: entry.env,
+      };
+    }
+
+    return servers;
   }
 
   private buildEnv(): Record<string, string> {

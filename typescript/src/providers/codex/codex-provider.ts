@@ -12,6 +12,7 @@ import type { Config } from "../../config.js";
 import { JsonRpcClient, type JsonRpcMessage } from "./json-rpc-client.js";
 import { DynamicToolExecutor } from "../../tools/dynamic-tool.js";
 import { getToolSpecs } from "../../tools/tool-specs.js";
+import { McpManager } from "../../mcp/mcp-manager.js";
 import { logger } from "../../logger.js";
 
 const NON_INTERACTIVE_ANSWER =
@@ -21,14 +22,23 @@ export class CodexProvider implements AgentProvider {
   readonly name = "codex";
   private config: Config;
   private toolExecutor: DynamicToolExecutor;
+  private mcpManager: McpManager;
   private clients = new Map<string, JsonRpcClient>();
+  private mcpInitialized = false;
 
   constructor(config: Config) {
     this.config = config;
     this.toolExecutor = new DynamicToolExecutor(config);
+    this.mcpManager = new McpManager(config.mcpServers);
   }
 
   async startSession(workspace: string, sessionConfig: SessionConfig): Promise<AgentSession> {
+    // Lazy-initialize MCP servers on first session
+    if (!this.mcpInitialized) {
+      this.mcpInitialized = true;
+      await this.mcpManager.initialize();
+    }
+
     const client = new JsonRpcClient();
     client.spawn(this.config.codexCommand, workspace);
 
@@ -51,8 +61,11 @@ export class CodexProvider implements AgentProvider {
 
       client.sendNotification("initialized", {});
 
-      // Start thread
-      const toolSpecs = getToolSpecs(this.config.trackerKind);
+      // Start thread — merge built-in tools with MCP-discovered tools
+      const toolSpecs = [
+        ...getToolSpecs(this.config.trackerKind),
+        ...this.mcpManager.getToolSpecs(),
+      ];
       const threadResult = (await client.send(
         "thread/start",
         {
@@ -195,6 +208,10 @@ export class CodexProvider implements AgentProvider {
     }
   }
 
+  async shutdown(): Promise<void> {
+    await this.mcpManager.shutdown();
+  }
+
   private async handleTurnMessage(
     client: JsonRpcClient,
     message: JsonRpcMessage,
@@ -266,7 +283,10 @@ export class CodexProvider implements AgentProvider {
       return;
     }
 
-    const result = await toolExecutor(toolName, args);
+    // Route MCP tools to the MCP manager, others to the standard executor
+    const result = this.mcpManager.canHandle(toolName)
+      ? await this.mcpManager.callTool(toolName, args)
+      : await toolExecutor(toolName, args);
     client.sendResult(id, result);
 
     const event = result.success ? "tool_call_completed" : "tool_call_failed";

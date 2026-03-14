@@ -111,13 +111,16 @@ Set agent.provider to "codex" or "claude" to select the model provider.
   logger.info(`Dashboard: http://${actualHost}:${actualPort}`);
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     logger.info("Shutting down...");
     orchestrator.stop();
     reporter.stop();
     webServer.stop();
     workflow.stopWatching();
     sessionStore.close();
+    if (provider.shutdown) {
+      await provider.shutdown();
+    }
     process.exit(0);
   };
 

@@ -72,4 +72,5 @@ export interface AgentProvider {
     opts?: TurnOptions,
   ): Promise<TurnResult>;
   stopSession(session: AgentSession): Promise<void>;
+  shutdown?(): Promise<void>;
 }
